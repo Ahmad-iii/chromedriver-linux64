@@ -1,0 +1,575 @@
+import re
+import time
+import cv2
+import numpy as np
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.common.action_chains import ActionChains
+from selenium.webdriver.common.keys import Keys
+
+class SmartCaptchaSolver:
+    def __init__(self, driver):
+        self.driver = driver
+        self.wait = WebDriverWait(driver, 10)
+    
+    def get_target_number_smart(self):
+        """Smart target extraction avoiding DOM traps"""
+        methods = [
+            self._get_target_by_visibility,
+            self._get_target_by_position,
+            self._get_target_by_google_lens,
+            self._get_target_by_context
+        ]
+        
+        for method in methods:
+            try:
+                target = method()
+                if target and len(target) == 3 and target.isdigit():
+                    print(f"✅ Target found using {method.__name__}: {target}")
+                    return target
+            except Exception as e:
+                print(f"❌ {method.__name__} failed: {e}")
+                continue
+        
+        return None
+    
+    def _get_target_by_visibility(self):
+        """Find target by checking which element is actually visible"""
+        # Look for instruction elements that are actually displayed
+        possible_selectors = [
+            "//div[contains(text(), 'Please select all boxes with number') and not(contains(@style, 'display: none')) and not(contains(@style, 'visibility: hidden'))]",
+            "//div[@class='box-label' and contains(text(), 'Please select all boxes with number')]",
+            "//*[contains(text(), 'Please select all boxes with number') and not(ancestor::*[contains(@style, 'display: none')])]"
+        ]
+        
+        for selector in possible_selectors:
+            try:
+                elements = self.driver.find_elements(By.XPATH, selector)
+                for element in elements:
+                    # Check if element is actually visible
+                    if element.is_displayed() and element.size['height'] > 0 and element.size['width'] > 0:
+                        text = element.text.strip()
+                        if text:  # Has visible text
+                            numbers = re.findall(r'\d{3}', text)
+                            if numbers:
+                                print(f"Found visible instruction: {text}")
+                                return numbers[0]
+            except Exception as e:
+                print(f"Selector failed: {selector} - {e}")
+                continue
+        
+        return None
+    
+    def _get_target_by_position(self):
+        """Find target by looking for elements in the CAPTCHA area"""
+        try:
+            # Find the main CAPTCHA container (usually contains the password field)
+            captcha_containers = [
+                "//div[.//input[@type='password']]",
+                "//form[.//input[@type='password']]",
+                "//div[contains(@class, 'captcha')]"
+            ]
+            
+            for container_xpath in captcha_containers:
+                try:
+                    container = self.driver.find_element(By.XPATH, container_xpath)
+                    
+                    # Look for instruction text within this container
+                    instruction_elements = container.find_elements(
+                        By.XPATH, 
+                        ".//div[contains(text(), 'Please select all boxes with number')]"
+                    )
+                    
+                    for element in instruction_elements:
+                        if element.is_displayed():
+                            text = element.text.strip()
+                            numbers = re.findall(r'\d{3}', text)
+                            if numbers:
+                                print(f"Found instruction in container: {text}")
+                                return numbers[0]
+                                
+                except Exception as e:
+                    continue
+                    
+        except Exception as e:
+            print(f"Position-based search failed: {e}")
+        
+        return None
+    
+    def _get_target_by_google_lens(self):
+        """Use Google Lens approach with both URL and upload methods"""
+        try:
+            print("🔍 Using Google Lens method...")
+            
+            # Take screenshot and save it to a file
+            screenshot_path = "captcha_screenshot.png"
+            self.driver.save_screenshot(screenshot_path)
+            
+            # Upload to image hosting service (you'll need to implement this)
+            screenshot_url = "https://i.ibb.co/xxx/captcha.jpg"  # Replace with actual upload
+            
+            # Store original window handle
+            original_window = self.driver.current_window_handle
+            
+            # Open new tab for Google Lens
+            self.driver.execute_script("window.open('');")
+            lens_window = [w for w in self.driver.window_handles if w != original_window][0]
+            self.driver.switch_to.window(lens_window)
+            
+            # Try URL method first
+            try:
+                print("Attempting URL-based method...")
+                self.driver.get("https://www.google.com/?0lud")
+                
+                # Find URL input field using reliable selector
+                url_input = self.driver.find_element(By.XPATH, '//input[@placeholder="Paste image link"]')
+                url_input.send_keys(screenshot_url)
+                url_input.send_keys(Keys.ENTER)
+                time.sleep(3)
+                
+                # Click text button
+                text_btn = WebDriverWait(self.driver, 10).until(
+                    EC.element_to_be_clickable((By.XPATH, '//div[contains(text(), "Text")]'))
+                )
+                text_btn.click()
+                time.sleep(2)
+                
+                # Click "Select all text" button
+                select_btn = self.driver.find_element(
+                    By.XPATH,
+                    '//span[contains(text(), "Select all text")]'
+                )
+                select_btn.click()
+                time.sleep(2)
+                
+                # Get result using specific class targeting
+                result_element = self.driver.find_element(
+                    By.XPATH, 
+                    '//div[@class="VIH6Y AbOGud"]'
+                ).find_element(By.TAG_NAME, 'h1')
+                
+                text = result_element.text
+                numbers = re.findall(r'number (\d{3})', text)
+                if numbers:
+                    target = numbers[0]
+                    self.driver.close()
+                    self.driver.switch_to.window(original_window)
+                    return target
+                    
+            except Exception as e:
+                print(f"URL method failed: {e}")
+            
+            # Fallback to upload method
+            try:
+                print("Falling back to upload method...")
+                self.driver.get("https://www.google.com/imghp")
+                
+                # Click camera icon
+                camera_btn = WebDriverWait(self.driver, 10).until(
+                    EC.element_to_be_clickable((By.XPATH, "//div[@aria-label='Search by image']"))
+                )
+                camera_btn.click()
+                
+                # Upload screenshot
+                time.sleep(1)
+                upload_btn = self.driver.find_element(By.XPATH, "//input[@type='file']")
+                upload_btn.send_keys(os.path.abspath(screenshot_path))
+                
+                time.sleep(5)  # Wait for processing
+                
+                # Click text button and extract result
+                text_btn = WebDriverWait(self.driver, 10).until(
+                    EC.element_to_be_clickable((By.XPATH, '//div[contains(text(), "Text")]'))
+                )
+                text_btn.click()
+                time.sleep(2)
+                
+                # Try both result selectors
+                selectors = [
+                    '//div[@class="VIH6Y AbOGud"]//h1',
+                    '//div[contains(@class, "QeOavc")]'
+                ]
+                
+                for selector in selectors:
+                    try:
+                        result = self.driver.find_element(By.XPATH, selector).text
+                        numbers = re.findall(r'number (\d{3})', result)
+                        if numbers:
+                            target = numbers[0]
+                            self.driver.close()
+                            self.driver.switch_to.window(original_window)
+                            return target
+                    except:
+                        continue
+                        
+            except Exception as e:
+                print(f"Upload method failed: {e}")
+            
+            # Clean up and return to original window
+            try:
+                self.driver.close()
+                self.driver.switch_to.window(original_window)
+            except:
+                pass
+            
+        except Exception as e:
+            print(f"Google Lens method failed completely: {e}")
+            # Ensure we're back on original window
+            try:
+                self.driver.switch_to.window(original_window)
+            except:
+                pass
+            
+        return None
+    
+    def _get_target_by_context(self):
+        """Find target by looking at page context and eliminating noise"""
+        try:
+            # Get all elements containing the instruction text
+            all_instruction_elements = self.driver.find_elements(
+                By.XPATH, 
+                "//*[contains(text(), 'Please select all boxes with number')]"
+            )
+            
+            print(f"Found {len(all_instruction_elements)} instruction elements")
+            
+            # Score each element based on context clues
+            best_element = None
+            best_score = -1
+            
+            for element in all_instruction_elements:
+                score = 0
+                
+                try:
+                    # Check if element is visible
+                    if element.is_displayed():
+                        score += 10
+                    
+                    # Check element position (should be near top of CAPTCHA)
+                    location = element.location
+                    if location['y'] < 400:  # Reasonable Y position
+                        score += 5
+                    
+                    # Check if element has reasonable size
+                    size = element.size
+                    if size['width'] > 100 and size['height'] > 10:
+                        score += 5
+                    
+                    # Check if it's not nested too deeply (avoid generated elements)
+                    parent_count = len(element.find_elements(By.XPATH, "./ancestor::*"))
+                    if parent_count < 15:  # Not too deeply nested
+                        score += 3
+                    
+                    # Check if element text is clean (not part of a long string)
+                    text = element.text.strip()
+                    if len(text) < 100:  # Reasonable length
+                        score += 2
+                    
+                    print(f"Element score: {score}, text: '{text[:50]}...'")
+                    
+                    if score > best_score:
+                        best_score = score;
+                        best_element = element
+                        
+                except Exception as e:
+                    print(f"Error scoring element: {e}")
+                    continue
+            
+            if best_element:
+                text = best_element.text.strip()
+                numbers = re.findall(r'\d{3}', text)
+                if numbers:
+                    print(f"Best element found with score {best_score}: {text}")
+                    return numbers[0]
+                    
+        except Exception as e:
+            print(f"Context-based search failed: {e}")
+        
+        return None
+    
+    def get_captcha_cells_smart(self):
+        """Smart cell detection avoiding the DOM trap"""
+        try:
+            # Look for the actual grid container (usually has 9 clickable divs)
+            grid_strategies = [
+                self._find_cells_by_onclick_pattern,
+                self._find_cells_by_visual_grid,
+                self._find_cells_by_number_content,
+                self._find_cells_by_position_grid
+            ]
+            
+            for strategy in grid_strategies:
+                try:
+                    cells = strategy()
+                    if len(cells) == 9:  # Perfect 3x3 grid
+                        print(f"✅ Found 3x3 grid using {strategy.__name__}")
+                        return cells
+                    elif len(cells) >= 9:
+                        print(f"✅ Found {len(cells)} cells using {strategy.__name__}, taking first 9")
+                        return cells[:9]
+                except Exception as e:
+                    print(f"❌ {strategy.__name__} failed: {e}")
+                    continue
+            
+            return []
+            
+        except Exception as e:
+            print(f"Smart cell detection failed: {e}")
+            return []
+    
+    def _find_cells_by_onclick_pattern(self):
+        """Find cells that have onclick handlers (likely clickable)"""
+        cells = self.driver.find_elements(By.XPATH, "//div[@onclick and string-length(normalize-space(text()))=3]")
+        
+        # Filter to get only those with 3-digit numbers
+        valid_cells = []
+        for cell in cells:
+            try:
+                text = cell.text.strip()
+                if text and len(text) == 3 and text.isdigit():
+                    valid_cells.append(cell)
+            except:
+                continue
+        
+        return valid_cells
+    
+    def _find_cells_by_visual_grid(self):
+        """Find cells by looking for visual grid pattern"""
+        # Find all divs with border styling and 3-digit content
+        cells = self.driver.find_elements(
+            By.XPATH, 
+            "//div[contains(@style, 'border') and string-length(normalize-space(text()))=3 and number(normalize-space(text()))=normalize-space(text())]"
+        )
+        
+        # Filter for displayed elements only
+        visible_cells = [cell for cell in cells if cell.is_displayed()]
+        return visible_cells
+    
+    def _find_cells_by_number_content(self):
+        """Find cells by their numeric content pattern"""
+        # Look for divs containing exactly 3 digits
+        xpath = "//div[string-length(normalize-space(text()))=3 and number(normalize-space(text()))=normalize-space(text()) and normalize-space(text()) != '']"
+        potential_cells = self.driver.find_elements(By.XPATH, xpath)
+        
+        # Filter out hidden elements and those that are part of the instruction noise
+        valid_cells = []
+        for cell in potential_cells:
+            try:
+                if (cell.is_displayed() and 
+                    cell.size['width'] > 30 and 
+                    cell.size['height'] > 30 and
+                    'box-label' not in (cell.get_attribute('class') or '')):
+                    valid_cells.append(cell)
+            except:
+                continue
+        
+        return valid_cells
+    
+    def _find_cells_by_position_grid(self):
+        """Find cells by analyzing their positions to identify grid layout"""
+        # Get all potential number elements
+        all_number_divs = self.driver.find_elements(
+            By.XPATH, 
+            "//div[string-length(normalize-space(text()))=3 and number(normalize-space(text()))=normalize-space(text())]"
+        )
+        
+        # Group by similar positions to find grid
+        positions = []
+        for div in all_number_divs:
+            try:
+                if div.is_displayed():
+                    loc = div.location
+                    size = div.size
+                    positions.append({
+                        'element': div,
+                        'x': loc['x'],
+                        'y': loc['y'],
+                        'width': size['width'],
+                        'height': size['height']
+                    })
+            except:
+                continue
+        
+        # Find elements that form a grid pattern (similar sizes, organized positions)
+        if len(positions) >= 9:
+            # Sort by Y position, then X position
+            positions.sort(key=lambda p: (p['y'], p['x']))
+            
+            # Take elements that could form a 3x3 grid
+            grid_elements = [p['element'] for p in positions[:9]]
+            return grid_elements
+        
+        return []
+    
+    def solve_captcha_complete(self):
+        """Complete CAPTCHA solving with smart detection"""
+        print("🚀 Starting smart CAPTCHA solver...")
+        
+        # Step 1: Get target number (avoiding DOM traps)
+        target_number = self.get_target_number_smart()
+        if not target_number:
+            print("❌ Failed to find target number")
+            return False
+        
+        print(f"🎯 Target number: {target_number}")
+        
+        # Step 2: Get grid cells (avoiding noise)
+        cells = self.get_captcha_cells_smart()
+        if not cells:
+            print("❌ Failed to find valid grid cells")
+            return False
+        
+        print(f"📊 Found {len(cells)} grid cells")
+        
+        # Step 3: Find and click matching cells
+        clicked_count = 0
+        for i, cell in enumerate(cells):
+            try:
+                cell_number = cell.text.strip()
+                print(f"Cell {i+1}: '{cell_number}'")
+                
+                if cell_number == target_number:
+                    # Scroll to element
+                    self.driver.execute_script("arguments[0].scrollIntoView(true);", cell)
+                    time.sleep(0.3)
+                    
+                    # Click with ActionChains for better reliability
+                    ActionChains(self.driver).move_to_element(cell).click().perform()
+                    clicked_count += 1
+                    print(f"✅ Clicked cell {i+1} ({cell_number})")
+                    time.sleep(0.4)
+                    
+            except Exception as e:
+                print(f"❌ Error with cell {i+1}: {e}")
+                continue
+        
+        print(f"🎉 Successfully clicked {clicked_count} matching cells")
+        return clicked_count > 0
+
+    def solve_captcha(self):
+        """
+        Enhanced CAPTCHA solver using multiple verification methods
+        """
+        print("🎯 Attempting to solve CAPTCHA...")
+        
+        # First try smart detection method
+        target = self._get_target_from_instruction()
+        if not target:
+            print("❌ Couldn't get target from instruction, trying Google Lens...")
+            target = self._get_target_by_google_lens()
+            
+        if not target:
+            print("❌ Both methods failed to get target number")
+            return False
+            
+        print(f"🎯 Target number identified: {target}")
+        
+        # Get all possible boxes
+        boxes = self._get_boxes()
+        if not boxes:
+            print("❌ No boxes found")
+            return False
+            
+        # Enhanced box verification
+        verified_boxes = []
+        for box in boxes:
+            try:
+                # Check if box is actually visible
+                if not box.is_displayed():
+                    continue
+                    
+                # Verify box has dimensions
+                size = box.size
+                if size['height'] == 0 or size['width'] == 0:
+                    continue
+                    
+                # Check if box is not hidden by CSS
+                style = box.get_attribute('style')
+                if 'display: none' in style or 'visibility: hidden' in style:
+                    continue
+                    
+                # Get box number using multiple methods
+                number = None
+                
+                # Try aria-label first
+                aria_label = box.get_attribute('aria-label')
+                if aria_label:
+                    matches = re.findall(r'(\d{3})', aria_label)
+                    if matches:
+                        number = matches[0]
+                        
+                # Try data attributes
+                if not number:
+                    for attr in ['data-number', 'data-value']:
+                        val = box.get_attribute(attr)
+                        if val and val.isdigit() and len(val) == 3:
+                            number = val
+                            break
+                            
+                # Finally try text content
+                if not number:
+                    text = box.text.strip()
+                    if text.isdigit() and len(text) == 3:
+                        number = text
+                        
+                if number:
+                    verified_boxes.append((box, number))
+                    
+            except Exception as e:
+                print(f"Error verifying box: {e}")
+                continue
+                
+        print(f"✅ Found {len(verified_boxes)} verified boxes")
+        
+        # Try to find and click the correct box
+        for box, number in verified_boxes:
+            if number == target:
+                try:
+                    box.click()
+                    time.sleep(1)
+                    
+                    # Verify if click was successful
+                    error_msg = self.driver.find_elements(By.CLASS_NAME, 'error-message')
+                    if not error_msg:
+                        print(f"✅ Successfully clicked box with number {target}")
+                        return True
+                except Exception as e:
+                    print(f"❌ Failed to click box: {e}")
+                    continue
+                    
+        print("❌ Could not find or click the correct box")
+        return False
+
+# Integration function
+def solve_captcha_smart(driver):
+    """Main function to solve CAPTCHA smartly"""
+    solver = SmartCaptchaSolver(driver)
+    
+    # Wait for CAPTCHA to fully load
+    time.sleep(3)
+    
+    # Solve CAPTCHA
+    success = solver.solve_captcha_complete()
+    
+    if success:
+        print("🎊 CAPTCHA solved successfully!")
+        
+        # Try to submit the form
+        try:
+            submit_btn = WebDriverWait(driver, 5).until(
+                EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'Submit') or @type='submit']"))
+            )
+            submit_btn.click()
+            print("✅ Form submitted!")
+            return True
+        except Exception as e:
+            print(f"⚠️ CAPTCHA solved but couldn't submit: {e}")
+            return True
+    else:
+        print("❌ CAPTCHA solving failed")
+        return False
+
+# Usage in your main script:
+# success = solve_captcha_smart(driver)

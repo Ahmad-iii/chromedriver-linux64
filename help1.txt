@@ -1,0 +1,297 @@
+import cv2
+import numpy as np
+import pytesseract
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.common.action_chains import ActionChains
+import re
+import time
+from PIL import Image
+import requests
+
+class HybridCaptchaSolver:
+    def __init__(self, driver):
+        self.driver = driver
+        self.wait = WebDriverWait(driver, 10)
+        
+    def get_target_number_hybrid(self):
+        """Get target number using multiple methods"""
+        methods = [
+            self._get_target_dom_method,
+            self._get_target_vision_method,
+            self._get_target_regex_method
+        ]
+        
+        for method in methods:
+            try:
+                target = method()
+                if target and len(target) == 3 and target.isdigit():
+                    print(f"Target found using {method.__name__}: {target}")
+                    return target
+            except Exception as e:
+                print(f"{method.__name__} failed: {e}")
+                continue
+        
+        return None
+    
+    def _get_target_dom_method(self):
+        """DOM-based target extraction"""
+        selectors = [
+            "//div[contains(text(), 'Please select all boxes with number')]",
+            "//p[contains(text(), 'Please select all boxes with number')]",
+            "//span[contains(text(), 'Please select all boxes with number')]",
+            "//*[contains(text(), 'Please select all boxes with number')]"
+        ]
+        
+        for selector in selectors:
+            try:
+                element = self.driver.find_element(By.XPATH, selector)
+                text = element.text
+                numbers = re.findall(r'\d{3}', text)
+                if numbers:
+                    return numbers[0]
+            except:
+                continue
+        return None
+    
+    def _get_target_vision_method(self):
+        """Vision-based target extraction"""
+        screenshot = self.driver.get_screenshot_as_png()
+        image = cv2.imdecode(np.frombuffer(screenshot, np.uint8), cv2.IMREAD_COLOR)
+        
+        # OCR on full page
+        rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        text = pytesseract.image_to_string(rgb_image)
+        
+        patterns = [r"Please select all boxes with number (\d{3})", r"number (\d{3})"]
+        for pattern in patterns:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            if matches:
+                return matches[0]
+        return None
+    
+    def _get_target_regex_method(self):
+        """Page source regex method"""
+        page_source = self.driver.page_source
+        patterns = [
+            r"Please select all boxes with number (\d{3})",
+            r"number[^\d]*(\d{3})",
+            r"select[^\d]*(\d{3})"
+        ]
+        
+        for pattern in patterns:
+            matches = re.findall(pattern, page_source, re.IGNORECASE)
+            if matches:
+                return matches[0]
+        return None
+    
+    def get_grid_cells_hybrid(self):
+        """Get grid cells using multiple strategies"""
+        strategies = [
+            self._get_cells_by_onclick,
+            self._get_cells_by_style,
+            self._get_cells_by_position,
+            self._get_cells_by_content
+        ]
+        
+        for strategy in strategies:
+            try:
+                cells = strategy()
+                if len(cells) >= 9:
+                    print(f"Found {len(cells)} cells using {strategy.__name__}")
+                    return cells[:9]  # Take first 9 for 3x3 grid
+            except Exception as e:
+                print(f"{strategy.__name__} failed: {e}")
+                continue
+        
+        return []
+    
+    def _get_cells_by_onclick(self):
+        """Find cells by onclick attributes"""
+        return self.driver.find_elements(By.XPATH, "//div[@onclick]")
+    
+    def _get_cells_by_style(self):
+        """Find cells by style attributes"""
+        selectors = [
+            "div[style*='border'][style*='text-align']",
+            "div[style*='width'][style*='height'][style*='cursor']",
+            "div[style*='display: inline-block']"
+        ]
+        
+        for selector in selectors:
+            elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
+            if len(elements) >= 9:
+                return elements
+        return []
+    
+    def _get_cells_by_position(self):
+        """Find cells by position/layout"""
+        # Look for grid-like arrangements
+        all_divs = self.driver.find_elements(By.TAG_NAME, "div")
+        potential_cells = []
+        
+        for div in all_divs:
+            try:
+                text = div.text.strip()
+                if text and len(text) == 3 and text.isdigit():
+                    # Check if it looks like a clickable cell
+                    style = div.get_attribute("style") or ""
+                    if any(attr in style.lower() for attr in ["border", "cursor", "background"]):
+                        potential_cells.append(div)
+            except:
+                continue
+        
+        return potential_cells
+    
+    def _get_cells_by_content(self):
+        """Find cells by their text content"""
+        xpath = "//div[string-length(normalize-space(text()))=3 and number(normalize-space(text()))=normalize-space(text())]"
+        return self.driver.find_elements(By.XPATH, xpath)
+    
+    def extract_cell_number_hybrid(self, cell):
+        """Extract number from cell using multiple methods"""
+        methods = [
+            lambda: cell.text.strip(),
+            lambda: cell.get_attribute("innerText") or "",
+            lambda: cell.get_attribute("textContent") or "",
+            lambda: self._extract_by_vision(cell)
+        ]
+        
+        for method in methods:
+            try:
+                text = method()
+                if text:
+                    numbers = re.findall(r'\d+', text)
+                    for num in numbers:
+                        if len(num) == 3:
+                            return num
+            except:
+                continue
+        
+        return None
+    
+    def _extract_by_vision(self, cell):
+        """Vision-based number extraction from cell"""
+        try:
+            cell_screenshot = cell.screenshot_as_png
+            image = cv2.imdecode(np.frombuffer(cell_screenshot, np.uint8), cv2.IMREAD_COLOR)
+            
+            # Preprocess for OCR
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
+            
+            # OCR
+            text = pytesseract.image_to_string(thresh, config='--psm 8 -c tessedit_char_whitelist=0123456789')
+            return text.strip()
+        except:
+            return ""
+    
+    def solve_captcha_hybrid(self):
+        """Main solving function"""
+        print("🔍 Starting hybrid CAPTCHA solver...")
+        
+        # Step 1: Get target number
+        target_number = self.get_target_number_hybrid()
+        if not target_number:
+            print("❌ Failed to find target number")
+            return False
+        
+        print(f"🎯 Target number: {target_number}")
+        
+        # Step 2: Get grid cells
+        cells = self.get_grid_cells_hybrid()
+        if not cells:
+            print("❌ Failed to find grid cells")
+            return False
+        
+        print(f"📊 Found {len(cells)} grid cells")
+        
+        # Step 3: Find and click matching cells
+        clicked_count = 0
+        for i, cell in enumerate(cells):
+            cell_number = self.extract_cell_number_hybrid(cell)
+            print(f"Cell {i+1}: '{cell_number}'")
+            
+            if cell_number == target_number:
+                try:
+                    # Ensure cell is visible
+                    self.driver.execute_script("arguments[0].scrollIntoView(true);", cell)
+                    time.sleep(0.3)
+                    
+                    # Try different click methods
+                    click_success = self._click_cell_robust(cell)
+                    if click_success:
+                        clicked_count += 1
+                        print(f"✅ Clicked cell {i+1} ({cell_number})")
+                    
+                except Exception as e:
+                    print(f"❌ Failed to click cell {i+1}: {e}")
+        
+        print(f"🎉 Successfully clicked {clicked_count} matching cells")
+        return clicked_count > 0
+    
+    def _click_cell_robust(self, cell):
+        """Robust cell clicking with multiple fallback methods"""
+        click_methods = [
+            lambda: cell.click(),
+            lambda: ActionChains(self.driver).move_to_element(cell).click().perform(),
+            lambda: self.driver.execute_script("arguments[0].click();", cell),
+            lambda: ActionChains(self.driver).move_to_element(cell).pause(0.1).click().perform()
+        ]
+        
+        for method in click_methods:
+            try:
+                method()
+                time.sleep(0.2)
+                return True
+            except Exception as e:
+                print(f"Click method failed: {e}")
+                continue
+        
+        return False
+
+# Easy integration function
+def solve_captcha_advanced(driver):
+    """Main function to solve CAPTCHA"""
+    solver = HybridCaptchaSolver(driver)
+    
+    # Wait for CAPTCHA to load
+    time.sleep(2)
+    
+    # Solve CAPTCHA
+    success = solver.solve_captcha_hybrid()
+    
+    if success:
+        print("🎊 CAPTCHA solved! Attempting to submit...")
+        
+        # Try to submit
+        submit_selectors = [
+            "//button[contains(text(), 'Submit')]",
+            "//input[@type='submit']",
+            "//button[@type='submit']",
+            "//button[contains(@class, 'submit')]"
+        ]
+        
+        for selector in submit_selectors:
+            try:
+                submit_btn = WebDriverWait(driver, 3).until(
+                    EC.element_to_be_clickable((By.XPATH, selector))
+                )
+                submit_btn.click()
+                print("✅ Form submitted successfully!")
+                return True
+            except:
+                continue
+        
+        print("⚠️ CAPTCHA solved but couldn't find submit button")
+        return True
+        
+    else:
+        print("❌ CAPTCHA solving failed")
+        return False
+
+# Usage in your existing code:
+# Replace your captcha solving section with:
+# success = solve_captcha_advanced(driver)

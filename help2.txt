@@ -1,0 +1,27 @@
+<note>
+i install selenium
+i copied url of lens.google.com, i inspect the field, everything in it was changing dynamically 
+except placeholder, so with some code the google lens get opened with a url like image of numbers captcha and it also click the text,
+after that clicking text, there is another button "Select all text" for that we access through text because
+every varaible/attributes get changed dynamically. so after writing more code, the button code clicked and
+can see the text, i hover on it by inspecting and i see that div class does'nt change which was //div[@class="VIH6Y AbOGud
+and we find it by find element tag h1 because it contains the result
+</note>
+
+<code>from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys |
+import time
+driver = webdriver.Chrome()
+CAPTCHA URL = "https://i.ibb.co/H27LCv6/69798. jpg" |
+driver.get ("https://www.google.com/?0lud") |
+captcha_inp = driver.find_element(By.XPATH, ‘//input[@placeholder="Paste image link"]')
+captcha_inp.send_keys(CAPTCHA_URL) |
+captcha_inp.send_keys(Keys.ENTER)
+time.sleep(3) |
+driver.find_element(By.ID, text}. click() |
+time. sleep(2)
+driver. find_element(By XPATH, '//span[contains(text(), "select all text™)]").click() |
+time. sleep(2) |
+result = driver. find_element(By.XPATH, *//div[@class="VIH6Y AbOGud "]').find_element(By.TAG NAME, 'h1’). text
+print(result) |</code>
