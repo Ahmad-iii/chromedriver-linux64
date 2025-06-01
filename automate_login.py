@@ -68,36 +68,81 @@ def find_email_field():
     return None
 
 def find_password_field():
-    """Find password field - improved version with better wait conditions"""
-    max_attempts = 3
-    for attempt in range(max_attempts):
+    """Try multiple strategies to find the password field after verify is clicked"""
+    print("Looking for password field...")
+    
+    # Wait a bit for the page to update after verify
+    time.sleep(2)
+    
+    # Debug: Check all visible inputs again after verify
+    try:
+        all_inputs = driver.find_elements(By.TAG_NAME, "input")
+        print(f"Found {len(all_inputs)} total inputs after verify:")
+        for i, inp in enumerate(all_inputs):
+            if inp.is_displayed():
+                print(f"Visible Input {i+1}: type={inp.get_attribute('type')}, name={inp.get_attribute('name')}, id={inp.get_attribute('id')}")
+    except Exception as e:
+        print(f"Error debugging inputs: {e}")
+    
+    # Strategy 1: Look for password type inputs
+    password_strategies = [
+        (By.XPATH, "//input[@type='password']"),
+        (By.CSS_SELECTOR, "input[type='password']"),
+        # Look for any visible input that might be the password field
+        (By.XPATH, "//input[@type='text' and contains(@class, 'form-control') and not(contains(@class, 'entry-disabled'))]"),
+        # Look for input near password label
+        (By.XPATH, "//label[contains(text(), 'Password')]/following-sibling::input"),
+        (By.XPATH, "//label[contains(text(), 'Password')]/..//input"),
+        # Look for any input below the email that's visible
+        (By.XPATH, "//form//input[@type='text' and @class='form-control'][last()]"),
+        # Try to find by position - password field often comes after email
+        (By.XPATH, "(//input[@type='text' and @class='form-control'])[last()]"),
+    ]
+    
+    for by, selector in password_strategies:
         try:
-            # First wait for presence
-            wait = WebDriverWait(driver, 5)
-            password = wait.until(
-                EC.presence_of_element_located((By.XPATH, "//input[@type='password']"))
-            )
-            
-            # Then wait for it to be interactable
-            wait.until(
-                EC.element_to_be_clickable((By.XPATH, "//input[@type='password']"))
-            )
-            
-            # Additional verification that field is truly ready
-            if password.is_displayed() and password.is_enabled():
-                try:
-                    # Try to focus the element first
-                    driver.execute_script("arguments[0].focus();", password)
-                    time.sleep(0.5)  # Short wait after focus
-                    return password
-                except Exception as e:
-                    print(f"Focus attempt {attempt + 1} failed: {e}")
-                    continue
+            elements = driver.find_elements(by, selector)
+            for element in elements:
+                if element.is_displayed() and element.is_enabled():
+                    print(f"Found potential password field using: {selector}")
+                    return element
         except Exception as e:
-            print(f"Password field attempt {attempt + 1} failed: {e}")
-            time.sleep(1)  # Wait between attempts
-            
-    print("Could not find interactable password field after all attempts")
+            print(f"Password strategy failed - {selector}: {e}")
+            continue
+    
+    # Strategy 2: Look for any visible, enabled input that's not the email field
+    try:
+        visible_inputs = driver.find_elements(By.XPATH, "//input[@type='text' or @type='password']")
+        for inp in visible_inputs:
+            if inp.is_displayed() and inp.is_enabled():
+                # Check if this input is empty and not the email field
+                current_value = inp.get_attribute('value')
+                if not current_value or current_value != EMAIL:
+                    print(f"Found empty visible input, trying as password field: {inp.get_attribute('name')}")
+                    return inp
+    except Exception as e:
+        print(f"Alternative password search failed: {e}")
+    
+    # Strategy 3: JavaScript approach to find password field
+    try:
+        password_element = driver.execute_script("""
+            var inputs = document.querySelectorAll('input');
+            for (var i = 0; i < inputs.length; i++) {
+                var input = inputs[i];
+                if (input.type === 'password' || 
+                    (input.offsetParent !== null && input.value === '' && input !== arguments[0])) {
+                    return input;
+                }
+            }
+            return null;
+        """, find_email_field())
+        
+        if password_element:
+            print("Found password field using JavaScript")
+            return password_element
+    except Exception as e:
+        print(f"JavaScript password search failed: {e}")
+    
     return None
 
 def debug_page_state():
