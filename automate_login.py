@@ -169,181 +169,141 @@ def debug_page_state():
             print(f"  - Error getting attributes: {e}")
 
 def get_target_number_by_lens():
-    """Extract target number using Google Lens OCR"""
+    """Extract target number using Google Lens OCR with optimized speed and reliability"""
     print("🔍 Using Google Lens to extract target number...")
     
     try:
-        # Step 1: Take screenshot and save it
+        # Take focused screenshot of CAPTCHA area only
         screenshot_path = "captcha_debug.png"
-        
-        # Find the CAPTCHA area and take screenshot
         try:
-            captcha_area = driver.find_element(By.XPATH, "//div[contains(@class, 'captcha') or .//div[contains(text(), 'Please select all boxes')]]")
+            # More specific CAPTCHA area selector for faster location
+            captcha_area = WebDriverWait(driver, 2).until(
+                EC.presence_of_element_located((By.XPATH, "//div[contains(@class, 'captcha') or .//div[contains(text(), 'Please select all boxes')]]"))
+            )
             captcha_area.screenshot(screenshot_path)
-            print(f"✅ Saved screenshot to {screenshot_path}")
-        except Exception as e:
-            print(f"Error taking screenshot: {e}")
-            # Fallback to full page screenshot if we can't find CAPTCHA area
+            print("✅ Captured CAPTCHA area")
+        except:
+            # Quick fallback to full screenshot
             driver.save_screenshot(screenshot_path)
-            print("⚠️ Took full page screenshot instead")
+            print("⚠️ Using full page screenshot")
 
         # Store original window handle
         original_window = driver.current_window_handle
         
         try:
-            # Open new tab and go to Google Lens
-            driver.execute_script("window.open('');")
+            # Open Google Lens in new tab
+            driver.execute_script("window.open('https://www.google.com/imghp');")
             lens_window = [w for w in driver.window_handles if w != original_window][0]
             driver.switch_to.window(lens_window)
             
-            # Go to Google Lens
-            driver.get("https://www.google.com/imghp")
-            time.sleep(2)  # Wait for page to load
-            
-            # Click camera icon
-            camera_btn = WebDriverWait(driver, 10).until(
-                EC.element_to_be_clickable((By.XPATH, "//div[@aria-label='Search by image']"))
+            # Wait for page to fully load
+            WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((By.XPATH, "//div[@aria-label='Search by image']"))
             )
-            camera_btn.click()
-            time.sleep(1)
+            print("✅ Google Lens page loaded")
+            time.sleep(1)  # Extra wait to ensure page is fully interactive
             
-            # Upload the screenshot
-            upload_btn = driver.find_element(By.XPATH, "//input[@type='file']")
-            upload_btn.send_keys(os.path.abspath(screenshot_path))
-            time.sleep(3)  # Wait for upload
+            # Click camera icon with retry logic
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    camera_btn = WebDriverWait(driver, 5).until(
+                        EC.element_to_be_clickable((By.XPATH, "//div[@aria-label='Search by image']"))
+                    )
+                    camera_btn.click()
+                    print("✅ Clicked camera icon")
+                    
+                    # Wait for file input to be present after click
+                    upload_input = WebDriverWait(driver, 5).until(
+                        EC.presence_of_element_located((By.XPATH, "//input[@type='file']"))
+                    )
+                    
+                    # Prepare absolute path and upload
+                    abs_path = os.path.abspath(screenshot_path)
+                    upload_input.send_keys(abs_path)
+                    print("✅ Uploaded image")
+                    break
+                except Exception as e:
+                    print(f"Attempt {attempt + 1} failed: {e}")
+                    if attempt < max_retries - 1:
+                        time.sleep(1)
+                        continue
+                    else:
+                        raise
             
-            # Wait for and find the search box using the consistent ID
-            search_box = WebDriverWait(driver, 10).until(
-                EC.presence_of_element_located((By.ID, "APjFqb"))
-            )
+            # Wait for and check Gemini response with progressive delay
+            print("Checking for Gemini response...")
+            start_time = time.time()
+            check_intervals = [0.5, 0.5, 1, 1, 2]  # Progressive delays
             
-            # Type "what number to select" and press Enter
-            search_box.clear()
-            search_box.send_keys("what number to select")
-            time.sleep(1)  # Wait a moment before searching
+            for wait_time in check_intervals:
+                time.sleep(wait_time)
+                
+                try:
+                    gemini_element = driver.find_element(By.XPATH, "//div[@class='rPeykc']")
+                    text = gemini_element.text.strip()
+                    
+                    if text:
+                        print(f"Found Gemini response: {text}")
+                        matches = re.findall(r'\b(\d{3})\b', text)
+                        if matches:
+                            number = matches[0]
+                            print(f"✅ Extracted number: {number}")
+                            driver.close()
+                            driver.switch_to.window(original_window)
+                            return number
+                except:
+                    continue
             
-            # Try clicking search button first
+            # If no early response, try search
             try:
-                search_btn = WebDriverWait(driver, 5).until(
-                    EC.element_to_be_clickable((By.XPATH, '//*[@id="tsf"]/div[1]/div[1]/div[2]/button[1]'))
+                print("No immediate response, trying search...")
+                search_box = WebDriverWait(driver, 5).until(
+                    EC.presence_of_element_located((By.ID, "APjFqb"))
                 )
-                search_btn.click()
-                print("✅ Clicked search button")
-            except:
-                # If button click fails, try pressing Enter
-                print("⚠️ Search button click failed, trying Enter key...")
+                
+                search_box.clear()
+                search_box.send_keys("what number to select")
+                time.sleep(0.5)
                 search_box.send_keys(Keys.RETURN)
-                print("✅ Pressed Enter to search")
-            
-            # Wait longer for Gemini's response to appear
-            print("Waiting for search results...")
-            time.sleep(5)  # Give more time for Gemini to process
-            
-            # Get Gemini's response using the exact XPath you provided
-            gemini_response_xpath = "//div[@class='rPeykc']"
-            try:
-                # First wait for the element to be present
-                gemini_element = WebDriverWait(driver, 10).until(
-                    EC.presence_of_element_located((By.XPATH, gemini_response_xpath))
+                print("✅ Performed search")
+                
+                # Wait longer for search results
+                time.sleep(2)
+                
+                # Final check for response
+                gemini_element = WebDriverWait(driver, 5).until(
+                    EC.presence_of_element_located((By.XPATH, "//div[@class='rPeykc']"))
                 )
-                
-                # Get the full text
-                gemini_text = gemini_element.text
-                print(f"Found Gemini response: {gemini_text}")
-                
-                # Extract 3-digit number
-                matches = re.findall(r'\b(\d{3})\b', gemini_text)
+                text = gemini_element.text.strip()
+                matches = re.findall(r'\b(\d{3})\b', text)
                 if matches:
                     number = matches[0]
-                    print(f"✅ Found number in Gemini response: {number}")
-                    
-                    # Clean up and return
+                    print(f"✅ Found number after search: {number}")
                     driver.close()
                     driver.switch_to.window(original_window)
                     return number
                     
             except Exception as e:
-                print(f"Error extracting from Gemini response: {e}")
-                
-            print("❌ No number found in Gemini response")
-            number_patterns = [
-                # Pattern 1: Common phrases in results
-                "//div[contains(text(), 'select') and contains(text(), 'number')]",
-                "//div[contains(text(), 'digit') and contains(text(), 'number')]",
-                "//div[contains(text(), 'target') and contains(text(), 'number')]",
-                # Pattern 2: Look for 3-digit numbers in results
-                "//*[regexp:test(text(), '\\b[0-9]{3}\\b')]"
-            ]
+                print(f"Search attempt failed: {e}")
             
-            for pattern in number_patterns:
-                try:
-                    elements = driver.find_elements(By.XPATH, pattern)
-                    for element in elements:
-                        text = element.text
-                        # Look for 3-digit number
-                        matches = re.findall(r'\b(\d{3})\b', text)
-                        if matches:
-                            target = matches[0]
-                            print(f"Found potential target number: {target}")
-                            
-                            # Validate number appears in original page
-                            driver.switch_to.window(original_window)
-                            try:
-                                # Look for this number in the grid
-                                grid_numbers = set()
-                                grid_cells = driver.find_elements(
-                                    By.XPATH,
-                                    "//div[string-length(normalize-space(text()))=3 and number(normalize-space(text()))=normalize-space(text())]"
-                                )
-                                
-                                for cell in grid_cells:
-                                    if (cell.is_displayed() and
-                                        cell.size['width'] > 20 and
-                                        cell.size['height'] > 20):
-                                        cell_text = cell.text.strip()
-                                        if cell_text.isdigit():
-                                            grid_numbers.add(cell_text)
-                                
-                                if target in grid_numbers:
-                                    print(f"✅ Validated target number {target} exists in grid")
-                                    
-                                    # Clean up and return
-                                    driver.switch_to.window(lens_window)
-                                    driver.close()
-                                    driver.switch_to.window(original_window)
-                                    return target
-                                    
-                            except Exception as e:
-                                print(f"Error validating number: {e}")
-                                # Switch back to continue searching
-                                driver.switch_to.window(lens_window)
-                                continue
-                                
-                except Exception as e:
-                    print(f"Error with pattern {pattern}: {e}")
-                    continue
-            
-            # If we get here, no valid number was found
-            print("❌ No valid number found in search results")
-            
-            # Clean up - close tab and switch back
+            # Cleanup
             driver.close()
             driver.switch_to.window(original_window)
             
         except Exception as e:
-            print(f"❌ Error during Google Lens interaction: {e}")
-            # Ensure we're back on the original window
+            print(f"Error during Lens process: {e}")
             try:
+                driver.close()
                 driver.switch_to.window(original_window)
             except:
                 pass
-            return None
             
     except Exception as e:
-        print(f"❌ Error in overall process: {e}")
-        return None
+        print(f"Error in overall process: {e}")
     
     return None
+
 def get_target_number():
     """Get the target number using multiple methods"""
     # First try Google Lens method as it's most reliable
@@ -535,69 +495,41 @@ def click_captcha_cell(cell, driver):
         return False
 
 def solve_captcha():
-    """Main function to solve the CAPTCHA"""
-    print("\n=== ATTEMPTING CAPTCHA SOLUTION ===")
+    """Main function to solve the CAPTCHA - optimized for speed"""
+    # Get target number - maximum 2 retries
+    for attempt in range(2):
+        target_number = get_target_number_by_lens()
+        if target_number:
+            break
+        print(f"Retry {attempt + 1}/2")
     
-    # Take a screenshot for debugging
-    driver.save_screenshot("captcha_debug.png")
-    print("Saved CAPTCHA screenshot as captcha_debug.png")
-    
-    # Step 1: Get target number with retries
-    max_retries = 3
-    retry_count = 0
-    target_number = None
-    
-    while retry_count < max_retries and not target_number:
-        target_number = get_target_number()
-        if not target_number:
-            print(f"Retry {retry_count + 1}/{max_retries} to get CAPTCHA target number")
-            retry_count += 1
-            time.sleep(1)  # Wait before retrying
-            
     if not target_number:
-        print("Failed to get CAPTCHA target number after multiple attempts")
+        print("❌ Could not get target number")
         return False
     
-    print(f"\nCAPTCHA target number: {target_number}")
-    time.sleep(2)  # Give time for any animations
+    print(f"Target number: {target_number}")
     
-    # Step 2: Get CAPTCHA cells
-    print("\nFinding CAPTCHA cells...")
+    # Quick lookup for matching cells
     try:
-        captcha_cells = get_captcha_cells(driver, target_number)
-        if not captcha_cells:
-            print("Could not find any CAPTCHA cells")
-            return False
-            
-        print(f"Found {len(captcha_cells)} potential CAPTCHA cells")
+        cells = WebDriverWait(driver, 3).until(
+            EC.presence_of_all_elements_located(
+                (By.XPATH, f"//div[text()='{target_number}']")
+            )
+        )
         
-        # Step 3: Click matching cells
-        cells_clicked = 0
-        for cell in captcha_cells:
-            try:
-                cell_number = cell.text.strip()
-                print(f"Found cell with number: {cell_number}")
-                
-                if cell_number == target_number:
-                    if click_captcha_cell(cell, driver):
-                        cells_clicked += 1
-                        print(f"Successfully clicked cell with number {target_number}")
-                    else:
-                        print(f"Failed to click cell with number {target_number}")
-                    
-            except Exception as e:
-                print(f"Error processing CAPTCHA cell: {e}")
-                continue
-                
-        if cells_clicked > 0:
-            print(f"Successfully clicked {cells_clicked} matching cells")
-            return True
-        else:
-            print("No matching cells were clicked")
-            return False
-            
+        clicks = 0
+        for cell in cells:
+            if cell.is_displayed() and cell.size['width'] > 20:
+                try:
+                    driver.execute_script("arguments[0].click();", cell)
+                    clicks += 1
+                except:
+                    continue
+        
+        return clicks > 0
+        
     except Exception as e:
-        print(f"Error solving CAPTCHA: {e}")
+        print(f"Error clicking cells: {e}")
         return False
 
 # Main execution block
